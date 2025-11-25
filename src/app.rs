@@ -1,13 +1,17 @@
 use egui::load::Bytes;
 use egui_async::{Bind, EguiAsyncPlugin};
 
-const XOR_IMAGE_URI: &str = "bytes://xor.bmp";
+const URI_IMAGE_BEFORE: &str = "bytes://before.bmp";
+const URI_IMAGE_ADDED: &str = "bytes://added.bmp";
+const URI_IMAGE_REMOVED: &str = "bytes://removed.bmp";
+const URI_IMAGE_AFTER: &str = "bytes://after.bmp";
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct TemplateApp {
     width: u32,
+    view: View,
 
     page_number: u16,
     #[serde(skip)]
@@ -16,7 +20,13 @@ pub struct TemplateApp {
     pdf_after: Bind<pdfium_render::prelude::PdfDocument<'static>, String>,
 
     #[serde(skip)]
-    image_xor: Option<Bytes>,
+    image_before: Option<Bytes>,
+    #[serde(skip)]
+    image_removed: Option<Bytes>,
+    #[serde(skip)]
+    image_added: Option<Bytes>,
+    #[serde(skip)]
+    image_after: Option<Bytes>,
 
     #[serde(skip)]
     pdfium: &'static pdfium_render::prelude::Pdfium,
@@ -28,10 +38,14 @@ impl Default for TemplateApp {
     fn default() -> Self {
         Self {
             width: 2048,
+            view: View::default(),
             page_number: 0,
             pdf_before: Bind::default(),
             pdf_after: Bind::default(),
-            image_xor: None,
+            image_before: None,
+            image_removed: None,
+            image_added: None,
+            image_after: None,
             pdfium: Box::leak(Box::default()),
         }
     }
@@ -87,84 +101,191 @@ impl eframe::App for TemplateApp {
         // });
 
         egui::SidePanel::left("left_panel").show(ctx, |ui| {
-            ui.heading("Drawing Diff");
-
-            ui.separator();
-
-            let mut changed = false;
-
-            changed |= pdf_picker(ui, "Before…", &mut self.pdf_before, self.pdfium).changed();
-            changed |= pdf_picker(ui, "After…", &mut self.pdf_after, self.pdfium).changed();
-
-            if let Some(pdf_before) = self.pdf_before.ok_ref()
-                && let Some(pdf_after) = self.pdf_after.ok_ref()
-            {
-                let page_count = pdf_before.pages().len().min(pdf_after.pages().len());
-                let last_page = page_count.saturating_sub(1);
-                self.page_number = self.page_number.clamp(0, last_page);
-                if page_count > 1 {
-                    changed |= ui
-                        .add(egui::Slider::new(&mut self.page_number, 0..=last_page).text("Page"))
-                        .changed();
-                }
-            }
-
-            if changed {
-                self.image_xor = None;
-                ctx.forget_image(XOR_IMAGE_URI);
-            }
-
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                powered_by_egui_and_eframe(ui);
-                egui::warn_if_debug_build(ui);
-            });
+            side_panel(self, ctx, ui);
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            // The central panel the region left after adding TopPanel's and SidePanel's
-            if let Some(xor_image) = &self.image_xor {
-                ui.centered_and_justified(|ui| {
-                    ui.add(egui::Image::from_bytes(XOR_IMAGE_URI, xor_image.clone()));
-                });
-            } else if let Some(pdf_before) = self.pdf_before.ok_ref()
-                && let Some(pdf_after) = self.pdf_after.ok_ref()
-            {
-                let image_before = pdf_to_image(pdf_before, self.width, self.page_number);
-                let image_after = pdf_to_image(pdf_after, self.width, self.page_number);
-
-                let mut xor_image = image::RgbaImage::new(
-                    self.width,
-                    image_before.height().max(image_after.height()),
-                );
-
-                xor_image.enumerate_pixels_mut().for_each(|(x, y, pixel)| {
-                    match (
-                        image_before.get_pixel_checked(x, y),
-                        image_after.get_pixel_checked(x, y),
-                    ) {
-                        (Some(a), Some(b)) => {
-                            *pixel = image::Rgba([
-                                a.0[0] ^ b.0[0],
-                                a.0[1] ^ b.0[1],
-                                a.0[2] ^ b.0[2],
-                                u8::MAX,
-                            ]);
-                        }
-                        (Some(a), None) | (None, Some(a)) => {
-                            *pixel = *a;
-                        }
-                        (None, None) => unreachable!(),
-                    }
-                });
-
-                let mut bytes = std::io::Cursor::new(Vec::new());
-                xor_image
-                    .write_to(&mut bytes, image::ImageFormat::Bmp)
-                    .expect("writing to buffer must succeed");
-                self.image_xor = Some(egui::load::Bytes::Shared(bytes.into_inner().into()));
-            }
+            central_panel(self, ctx, ui);
         });
     }
+}
+
+fn side_panel(app: &mut TemplateApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+    ui.heading("Drawing Diff");
+
+    ui.separator();
+
+    let mut changed = false;
+
+    changed |= pdf_picker(ui, "Before…", &mut app.pdf_before, app.pdfium).changed();
+    changed |= pdf_picker(ui, "After…", &mut app.pdf_after, app.pdfium).changed();
+
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut app.view, View::Before, "Before");
+        ui.radio_value(&mut app.view, View::Added, "Added");
+        ui.radio_value(&mut app.view, View::Removed, "Removed");
+        ui.radio_value(&mut app.view, View::After, "After");
+    });
+
+    if let Some(pdf_before) = app.pdf_before.ok_ref()
+        && let Some(pdf_after) = app.pdf_after.ok_ref()
+    {
+        let page_count = pdf_before.pages().len().min(pdf_after.pages().len());
+        let last_page = page_count.saturating_sub(1);
+        app.page_number = app.page_number.clamp(0, last_page);
+        if page_count > 1 {
+            changed |= ui
+                .add(egui::Slider::new(&mut app.page_number, 0..=last_page).text("Page"))
+                .changed();
+        }
+    }
+
+    if changed {
+        app.image_before = None;
+        ctx.forget_image(URI_IMAGE_BEFORE);
+
+        app.image_added = None;
+        ctx.forget_image(URI_IMAGE_ADDED);
+
+        app.image_removed = None;
+        ctx.forget_image(URI_IMAGE_REMOVED);
+
+        app.image_after = None;
+        ctx.forget_image(URI_IMAGE_AFTER);
+    }
+
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+        powered_by_egui_and_eframe(ui);
+        egui::warn_if_debug_build(ui);
+    });
+}
+
+fn central_panel(app: &mut TemplateApp, _ctx: &egui::Context, ui: &mut egui::Ui) {
+    // The central panel the region left after adding TopPanel's and SidePanel's
+    if let Some(image_before) = &app.image_before
+        && let Some(image_added) = &app.image_added
+        && let Some(image_removed) = &app.image_removed
+        && let Some(image_after) = &app.image_after
+    {
+        ui.centered_and_justified(|ui| match app.view {
+            View::Before => ui.add(egui::Image::from_bytes(
+                URI_IMAGE_BEFORE,
+                image_before.clone(),
+            )),
+            View::Added => ui.add(egui::Image::from_bytes(
+                URI_IMAGE_ADDED,
+                image_added.clone(),
+            )),
+            View::Removed => ui.add(egui::Image::from_bytes(
+                URI_IMAGE_REMOVED,
+                image_removed.clone(),
+            )),
+            View::After => ui.add(egui::Image::from_bytes(
+                URI_IMAGE_AFTER,
+                image_after.clone(),
+            )),
+        });
+    } else if app.pdf_before.is_ok() && app.pdf_after.is_ok() {
+        update_diffs(app);
+    }
+}
+
+fn update_diffs(app: &mut TemplateApp) {
+    let Some(pdf_before) = app.pdf_before.ok_ref() else {
+        return;
+    };
+    let Some(pdf_after) = app.pdf_after.ok_ref() else {
+        return;
+    };
+
+    let image_before = pdf_to_image(pdf_before, app.width, app.page_number);
+    let image_after = pdf_to_image(pdf_after, app.width, app.page_number);
+
+    let mut image_added =
+        image::RgbaImage::new(app.width, image_before.height().max(image_after.height()));
+
+    let mut image_removed =
+        image::RgbaImage::new(app.width, image_before.height().max(image_after.height()));
+
+    image_added
+        .enumerate_pixels_mut()
+        .for_each(|(x, y, pixel)| {
+            match (
+                image_before.get_pixel_checked(x, y),
+                image_after.get_pixel_checked(x, y),
+            ) {
+                (Some(a), Some(b)) => {
+                    let metric =
+                        a.0.iter()
+                            .zip(b.0)
+                            .take(3)
+                            .map(|(a, b)| a ^ b)
+                            .fold(0u8, |sum, x| sum.saturating_add(x));
+
+                    *pixel = if metric > 0 {
+                        *b
+                    } else {
+                        image::Rgba([u8::MAX; 4])
+                    };
+                }
+                (Some(a), None) | (None, Some(a)) => {
+                    *pixel = *a;
+                }
+                (None, None) => unreachable!(),
+            }
+        });
+
+    image_removed
+        .enumerate_pixels_mut()
+        .for_each(|(x, y, pixel)| {
+            match (
+                image_before.get_pixel_checked(x, y),
+                image_after.get_pixel_checked(x, y),
+            ) {
+                (Some(a), Some(b)) => {
+                    let metric =
+                        a.0.iter()
+                            .zip(b.0)
+                            .take(3)
+                            .map(|(a, b)| a ^ b)
+                            .fold(0u8, |sum, x| sum.saturating_add(x));
+
+                    *pixel = if metric > 0 {
+                        *a
+                    } else {
+                        image::Rgba([u8::MAX; 4])
+                    };
+                }
+                (Some(a), None) | (None, Some(a)) => {
+                    *pixel = *a;
+                }
+                (None, None) => unreachable!(),
+            }
+        });
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image_before
+        .write_to(&mut bytes, image::ImageFormat::Bmp)
+        .expect("writing to buffer must succeed");
+    app.image_before = Some(egui::load::Bytes::Shared(bytes.into_inner().into()));
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image_added
+        .write_to(&mut bytes, image::ImageFormat::Bmp)
+        .expect("writing to buffer must succeed");
+    app.image_added = Some(egui::load::Bytes::Shared(bytes.into_inner().into()));
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image_removed
+        .write_to(&mut bytes, image::ImageFormat::Bmp)
+        .expect("writing to buffer must succeed");
+    app.image_removed = Some(egui::load::Bytes::Shared(bytes.into_inner().into()));
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image_after
+        .write_to(&mut bytes, image::ImageFormat::Bmp)
+        .expect("writing to buffer must succeed");
+    app.image_after = Some(egui::load::Bytes::Shared(bytes.into_inner().into()));
 }
 
 fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
@@ -239,4 +360,13 @@ fn pdf_to_image(
         .as_image();
 
     image.into_rgba8()
+}
+
+#[derive(PartialEq, Default, serde::Deserialize, serde::Serialize)]
+enum View {
+    Before,
+    #[default]
+    Added,
+    Removed,
+    After,
 }
