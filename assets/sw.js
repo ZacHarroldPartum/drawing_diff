@@ -2,8 +2,10 @@ var cacheName = 'egui-template-pwa';
 var filesToCache = [
   './',
   './index.html',
-  './eframe_template.js',
-  './eframe_template_bg.wasm',
+  './drawing_diff.js',
+  './drawing_diff_bg.wasm',
+  './pdfium.js',
+  './pdfium.wasm',
 ];
 
 /* Start the service worker and cache all of the app's content */
