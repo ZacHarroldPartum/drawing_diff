@@ -1,7 +1,7 @@
 use egui::load::Bytes;
 use egui_async::{Bind, EguiAsyncPlugin};
 
-const XOR_IMAGE_URI: &'static str = "bytes://xor.bmp";
+const XOR_IMAGE_URI: &str = "bytes://xor.bmp";
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -32,7 +32,7 @@ impl Default for TemplateApp {
             pdf_before: Bind::default(),
             pdf_after: Bind::default(),
             image_xor: None,
-            pdfium: Box::leak(Box::new(Default::default())),
+            pdfium: Box::leak(Box::default()),
         }
     }
 }
@@ -93,8 +93,8 @@ impl eframe::App for TemplateApp {
 
             let mut changed = false;
 
-            changed |= pdf_picker(ui, "Before…", &mut self.pdf_before, &self.pdfium).changed();
-            changed |= pdf_picker(ui, "After…", &mut self.pdf_after, &self.pdfium).changed();
+            changed |= pdf_picker(ui, "Before…", &mut self.pdf_before, self.pdfium).changed();
+            changed |= pdf_picker(ui, "After…", &mut self.pdf_after, self.pdfium).changed();
 
             if let Some(pdf_before) = self.pdf_before.ok_ref()
                 && let Some(pdf_after) = self.pdf_after.ok_ref()
@@ -122,7 +122,7 @@ impl eframe::App for TemplateApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // The central panel the region left after adding TopPanel's and SidePanel's
-            if let Some(ref xor_image) = self.image_xor {
+            if let Some(xor_image) = &self.image_xor {
                 ui.centered_and_justified(|ui| {
                     ui.add(egui::Image::from_bytes(XOR_IMAGE_URI, xor_image.clone()));
                 });
@@ -160,7 +160,7 @@ impl eframe::App for TemplateApp {
                 let mut bytes = std::io::Cursor::new(Vec::new());
                 xor_image
                     .write_to(&mut bytes, image::ImageFormat::Bmp)
-                    .unwrap();
+                    .expect("writing to buffer must succeed");
                 self.image_xor = Some(egui::load::Bytes::Shared(bytes.into_inner().into()));
             }
         });
@@ -215,7 +215,7 @@ fn pdf_picker(
             ui.label("Loaded Untitled Document");
         }
     } else if let Some(err) = pdf.err_ref() {
-        ui.label(format!("Could not load drawing: {}", err));
+        ui.label(format!("Could not load drawing: {err}"));
     } else if pdf.is_idle() {
         ui.label("Please select a drawing...");
     } else if pdf.is_pending() {
@@ -232,10 +232,10 @@ fn pdf_to_image(
 ) -> image::RgbaImage {
     use pdfium_render::prelude::*;
 
-    let page = pdf.pages().get(page_number).unwrap();
+    let page = pdf.pages().get(page_number).expect("page number in bounds");
     let image = page
         .render_with_config(&PdfRenderConfig::new().set_target_width(width as i32))
-        .unwrap()
+        .expect("rendering must succeed")
         .as_image();
 
     image.into_rgba8()
