@@ -13,6 +13,7 @@ pub struct TemplateApp {
     width: u32,
     height: u32,
     view: View,
+    quality: f32,
 
     #[serde(skip)]
     page_number: u16,
@@ -36,6 +37,7 @@ impl Default for TemplateApp {
             width: 2048,
             height: 2048,
             view: View::default(),
+            quality: 2.,
             page_number: 0,
             page_count: 0,
             pdf_before: Bind::default(),
@@ -136,6 +138,19 @@ fn side_panel(app: &mut TemplateApp, ctx: &egui::Context, ui: &mut egui::Ui) {
         }
     }
 
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+        powered_by_egui_and_eframe(ui);
+        egui::warn_if_debug_build(ui);
+
+        changed |= ui
+            .add(
+                egui::widgets::Slider::new(&mut app.quality, 0.25..=4.0)
+                    .text("Quality")
+                    .step_by(0.25),
+            )
+            .changed();
+    });
+
     if changed {
         app.images = None;
 
@@ -144,11 +159,6 @@ fn side_panel(app: &mut TemplateApp, ctx: &egui::Context, ui: &mut egui::Ui) {
         ctx.forget_image(URI_IMAGE_REMOVED);
         ctx.forget_image(URI_IMAGE_AFTER);
     }
-
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-        powered_by_egui_and_eframe(ui);
-        egui::warn_if_debug_build(ui);
-    });
 }
 
 fn central_panel(app: &mut TemplateApp, _ctx: &egui::Context, ui: &mut egui::Ui) {
@@ -181,11 +191,15 @@ fn central_panel(app: &mut TemplateApp, _ctx: &egui::Context, ui: &mut egui::Ui)
     } else if let Some(pdf_before) = app.pdf_before.ok_ref()
         && let Some(pdf_after) = app.pdf_after.ok_ref()
     {
-        app.width = ui.available_width().round() as u32 * 2;
-        let image_before = pdf_before.render(app.width, app.page_number).unwrap();
-        let image_after = pdf_after.render(app.width, app.page_number).unwrap();
+        app.width = (ui.available_width().round() * app.quality) as u32;
+        let image_before = pdf_before
+            .render(app.width, app.page_number)
+            .expect("must be able to render PDF");
+        let image_after = pdf_after
+            .render(app.width, app.page_number)
+            .expect("must be able to render PDF");
         app.height = image_before.height().max(image_after.height());
-        app.images = Some(Images::generate(image_before, image_after));
+        app.images = Some(Images::generate(&image_before, &image_after));
     }
 }
 
@@ -197,7 +211,7 @@ struct Images {
 }
 
 impl Images {
-    fn generate(before: image::RgbaImage, after: image::RgbaImage) -> Self {
+    fn generate(before: &image::RgbaImage, after: &image::RgbaImage) -> Self {
         let width = before.width().max(after.width());
         let height = before.height().max(after.height());
         let mut added = image::RgbaImage::new(width, height);
@@ -222,7 +236,7 @@ impl Images {
                         } else {
                             *pixel_added = image::Rgba([u8::MAX; 4]);
                             *pixel_removed = image::Rgba([u8::MAX; 4]);
-                        };
+                        }
                     }
                     (Some(a), None) | (None, Some(a)) => {
                         *pixel_added = *a;

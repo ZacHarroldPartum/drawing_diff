@@ -8,7 +8,7 @@ use pdfium_render::prelude::{
     PdfDocument, PdfDocumentMetadataTagType, PdfRenderConfig, Pdfium, PdfiumError,
 };
 
-static PDFIUM: LazyLock<Pdfium> = LazyLock::new(|| Pdfium::default());
+static PDFIUM: LazyLock<Pdfium> = LazyLock::new(Pdfium::default);
 
 pub(crate) struct Pdf<'a> {
     inner: PdfDocument<'a>,
@@ -21,7 +21,7 @@ impl<'a> Pdf<'a> {
         let title = inner
             .metadata()
             .get(PdfDocumentMetadataTagType::Title)
-            .map(|tag| tag.value().to_string());
+            .map(|tag| tag.value().to_owned());
         let pages = inner.pages().len();
 
         Self {
