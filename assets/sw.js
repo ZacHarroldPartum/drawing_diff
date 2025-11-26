@@ -4,9 +4,9 @@ var filesToCache = [
   './index.html',
   './drawing_diff.js',
   './drawing_diff_bg.wasm',
-  './pdfium.esm.js',
-  './pdfium.esm.wasm',
   './drawing_diff.init.mjs',
+  './assets/pdfium.esm.js',
+  './assets/pdfium.esm.wasm',
 ];
 
 /* Start the service worker and cache all of the app's content */
