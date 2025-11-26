@@ -21,12 +21,7 @@ export default function myInitializer () {
       console.log("Loading... successful!");
 
       PDFiumModule().then(async pdfiumModule => {
-        const {
-            initialize_pdfium_render,       // Always provided by pdfium-render
-            start,    // Defined by us ...
-        } = wasm;
-
-        initialize_pdfium_render(
+        wasm.initialize_pdfium_render(
             pdfiumModule, // Emscripten-wrapped Pdfium WASM module
             wasm, // wasm_bindgen-wrapped WASM module built from our Rust application
             false, // Debugging flag; set this to true to get tracing information logged to the Javascript console

@@ -1,10 +1,12 @@
 use egui::load::Bytes;
 use egui_async::{Bind, EguiAsyncPlugin};
+use rayon::iter::{IndexedParallelIterator as _, ParallelIterator as _};
 
 const URI_IMAGE_BEFORE: &str = "bytes://before.bmp";
 const URI_IMAGE_ADDED: &str = "bytes://added.bmp";
 const URI_IMAGE_REMOVED: &str = "bytes://removed.bmp";
 const URI_IMAGE_AFTER: &str = "bytes://after.bmp";
+const IMAGE_FORMAT: image::ImageFormat = image::ImageFormat::Bmp;
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -217,58 +219,56 @@ impl Images {
         let mut added = image::RgbaImage::new(width, height);
         let mut removed = image::RgbaImage::new(width, height);
 
+        added.fill(u8::MAX);
+        removed.fill(u8::MAX);
+
         added
-            .enumerate_pixels_mut()
-            .zip(removed.enumerate_pixels_mut())
+            .par_enumerate_pixels_mut()
+            .zip(removed.par_enumerate_pixels_mut())
             .for_each(|((x, y, pixel_added), (_, _, pixel_removed))| {
-                match (
+                let (Some(a), Some(b)) = (
                     before.get_pixel_checked(x, y),
                     after.get_pixel_checked(x, y),
-                ) {
-                    (Some(a), Some(b)) => {
-                        let metric = (a.0[0] ^ b.0[0])
-                            .saturating_add(a.0[1] ^ b.0[1])
-                            .saturating_add(a.0[2] ^ b.0[2]);
+                ) else {
+                    return;
+                };
 
-                        if metric > 0 {
-                            *pixel_added = *b;
-                            *pixel_removed = *a;
-                        } else {
-                            *pixel_added = image::Rgba([u8::MAX; 4]);
-                            *pixel_removed = image::Rgba([u8::MAX; 4]);
-                        }
-                    }
-                    (Some(a), None) | (None, Some(a)) => {
-                        *pixel_added = *a;
-                        *pixel_removed = *a;
-                    }
-                    (None, None) => unreachable!(),
+                let metric = (a.0[0] ^ b.0[0])
+                    .saturating_add(a.0[1] ^ b.0[1])
+                    .saturating_add(a.0[2] ^ b.0[2]);
+
+                if metric == 0 {
+                    return;
                 }
+
+                *pixel_added = *b;
+                *pixel_removed = *a;
             });
 
-        let mut bytes = std::io::Cursor::new(Vec::new());
+        let mut inner_vec = Vec::new();
+
         before
-            .write_to(&mut bytes, image::ImageFormat::Bmp)
+            .write_to(&mut std::io::Cursor::new(&mut inner_vec), IMAGE_FORMAT)
             .expect("writing to buffer must succeed");
-        let before = egui::load::Bytes::Shared(bytes.into_inner().into());
+        let before = egui::load::Bytes::Shared(inner_vec.as_slice().into());
+        inner_vec.clear();
 
-        let mut bytes = std::io::Cursor::new(Vec::new());
         added
-            .write_to(&mut bytes, image::ImageFormat::Bmp)
+            .write_to(&mut std::io::Cursor::new(&mut inner_vec), IMAGE_FORMAT)
             .expect("writing to buffer must succeed");
-        let added = egui::load::Bytes::Shared(bytes.into_inner().into());
+        let added = egui::load::Bytes::Shared(inner_vec.as_slice().into());
+        inner_vec.clear();
 
-        let mut bytes = std::io::Cursor::new(Vec::new());
         removed
-            .write_to(&mut bytes, image::ImageFormat::Bmp)
+            .write_to(&mut std::io::Cursor::new(&mut inner_vec), IMAGE_FORMAT)
             .expect("writing to buffer must succeed");
-        let removed = egui::load::Bytes::Shared(bytes.into_inner().into());
+        let removed = egui::load::Bytes::Shared(inner_vec.as_slice().into());
+        inner_vec.clear();
 
-        let mut bytes = std::io::Cursor::new(Vec::new());
         after
-            .write_to(&mut bytes, image::ImageFormat::Bmp)
+            .write_to(&mut std::io::Cursor::new(&mut inner_vec), IMAGE_FORMAT)
             .expect("writing to buffer must succeed");
-        let after = egui::load::Bytes::Shared(bytes.into_inner().into());
+        let after = egui::load::Bytes::Shared(inner_vec.into());
 
         Self {
             before,
@@ -300,15 +300,15 @@ fn pdf_picker(
 
     if ui.button(label).clicked() {
         pdf.refresh(async move {
-            let handle = rfd::AsyncFileDialog::new()
+            rfd::AsyncFileDialog::new()
                 .add_filter("PDF", &["pdf"])
                 .pick_file()
                 .await
-                .ok_or(String::from("No File Chosen"))?;
-
-            let pdf_bytes = handle.read().await;
-
-            crate::pdf::Pdf::try_from(pdf_bytes).map_err(|err| err.to_string())
+                .ok_or(String::from("No File Chosen"))?
+                .read()
+                .await
+                .try_into()
+                .map_err(ref_into_string)
         });
 
         response.mark_changed();
@@ -343,4 +343,9 @@ enum View {
     Added,
     Removed,
     After,
+}
+
+#[expect(clippy::needless_pass_by_value)]
+fn ref_into_string<T: std::string::ToString>(value: T) -> String {
+    value.to_string()
 }

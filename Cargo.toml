@@ -24,7 +24,7 @@ log = "0.4.27"
 egui_extras = { version = "0.33.2", default-features = false, features = [
   "image",
 ] }
-image = { version = "0.25.9", default-features = false, features = ["bmp"] }
+image = { version = "0.25.9", default-features = false, features = ["bmp", "rayon"] }
 rfd = { version = "0.15.4", default-features = false, features = [
   "ashpd",
   "async-std",
@@ -34,6 +34,7 @@ rfd = { version = "0.15.4", default-features = false, features = [
 ] }
 pdfium-render = { version = "0.8.36", features = ["sync"] }
 egui-async = { version = "0.2.5" }
+rayon = { version = "1.11.0", default-features = false }
 
 # You only need serde if you want app persistence:
 serde = { version = "1.0.219", features = ["derive"] }
